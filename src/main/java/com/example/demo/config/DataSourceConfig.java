@@ -1,22 +1,40 @@
 package com.example.demo.config;
 
+import com.example.demo.enums.DataSourceType;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.boot.jdbc.DataSourceBuilder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.DependsOn;
+import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
+import org.springframework.jdbc.datasource.LazyConnectionDataSourceProxy;
 import org.springframework.jdbc.datasource.lookup.AbstractRoutingDataSource;
 import org.springframework.orm.jpa.JpaTransactionManager;
 import org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean;
 import org.springframework.orm.jpa.vendor.HibernateJpaVendorAdapter;
 
 import jakarta.persistence.EntityManagerFactory;
+import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.annotation.EnableTransactionManagement;
+
 import javax.sql.DataSource;
 import java.util.HashMap;
 import java.util.Map;
 
+@Slf4j
 @Configuration
+@Component
+@EnableTransactionManagement
+@EnableJpaRepositories(
+        entityManagerFactoryRef = "entityManagerFactory",
+        transactionManagerRef = "transactionManager",
+        basePackages = {
+                "com.example.demo.repository.animal"
+        }
+)
 public class DataSourceConfig {
 
     private final DatabaseProperties databaseProperties;
@@ -46,32 +64,26 @@ public class DataSourceConfig {
     }
 
     @Bean(name = "routingDataSource")
-    public DataSource routingDataSource(
+    public TransactionRoutingDataSource routingDataSource(
             @Qualifier("primaryDataSource") DataSource primaryDataSource,
-            @Qualifier("secondaryDataSource") DataSource secondaryDataSource) {
+            @Qualifier("secondaryDataSource") DataSource secondaryDataSource)
+    {
+        log.info("[TUNA-ROUTING-DATASOURCE] Initializing RoutingDataSource...");
+        TransactionRoutingDataSource routingDataSource = new TransactionRoutingDataSource();
 
-        AbstractRoutingDataSource routingDataSource = new AbstractRoutingDataSource() {
-            @Override
-            protected Object determineCurrentLookupKey() {
-                return RoutingContext.getDataSourceKey(); // Ensure RoutingContext exists and is functional
-            }
-        };
+        Map<Object, Object> targetDataSources = new HashMap<>();
+        targetDataSources.put(DataSourceType.READ_WRITE, primaryDataSource);
+        targetDataSources.put(DataSourceType.READ_ONLY, secondaryDataSource);
 
-        Map<Object, Object> dataSourceMap = new HashMap<>();
-        dataSourceMap.put("PRIMARY", primaryDataSource);
-        dataSourceMap.put("SECONDARY", secondaryDataSource);
-
-        routingDataSource.setTargetDataSources(dataSourceMap);
-        routingDataSource.setDefaultTargetDataSource(primaryDataSource);
-
+        routingDataSource.setTargetDataSources(targetDataSources);
         return routingDataSource;
     }
 
     @Bean(name = "entityManagerFactory")
     public LocalContainerEntityManagerFactoryBean entityManagerFactory(
-            @Qualifier("routingDataSource") DataSource routingDataSource) {
+            @Qualifier("transactionAwareDataSource") DataSource transactionAwareDataSource) {
         LocalContainerEntityManagerFactoryBean em = new LocalContainerEntityManagerFactoryBean();
-        em.setDataSource(routingDataSource);
+        em.setDataSource(transactionAwareDataSource); // Now using the meaningful name
         em.setPackagesToScan("com.example.demo.entity"); // Update with your entity package
         em.setJpaVendorAdapter(new HibernateJpaVendorAdapter());
 
@@ -83,9 +95,19 @@ public class DataSourceConfig {
         return em;
     }
 
+
     @Bean(name = "transactionManager")
     public JpaTransactionManager transactionManager(
             @Qualifier("entityManagerFactory") EntityManagerFactory entityManagerFactory) {
+        log.info("[TUNA-JPATRANSACTION-MANAGER] TransactionManager uses EntityManagerFactory: {}", entityManagerFactory);
         return new JpaTransactionManager(entityManagerFactory);
     }
+
+    @Bean(name = "transactionAwareDataSource")
+    @DependsOn({"primaryDataSource", "secondaryDataSource", "routingDataSource"})
+    public DataSource transactionAwareDataSource(@Qualifier("routingDataSource") DataSource routingDataSource) {
+        return new LazyConnectionDataSourceProxy(routingDataSource);
+    }
+
+
 }

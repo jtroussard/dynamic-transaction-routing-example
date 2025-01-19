@@ -9,8 +9,8 @@ import org.springframework.context.annotation.Configuration;
 @Data
 public class DatabaseProperties {
 
-    private DataSourceConfig primary;
-    private DataSourceConfig secondary;
+    private DataSourceConfig primary; // readWrite
+    private DataSourceConfig secondary; // readOnly
 
     @Data
     public static class DataSourceConfig {
